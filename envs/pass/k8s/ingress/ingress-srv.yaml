@@ -1,0 +1,237 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-service
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "rufous-ingress-ip"
+    networking.gke.io/managed-certificates: "rufous-com-cert"
+    networking.gke.io/v1beta1.FrontendConfig: "rufous-frontend-config"
+    kubernetes.io/ingress.allow-http: "true"
+spec:
+  rules:
+    - host: rufous.com
+      http:
+        paths:
+          - path: /api/admin
+            pathType: Prefix
+            backend:
+              service:
+                name: admin-srv
+                port:
+                  number: 3000
+          - path: /api/users
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-srv
+                port:
+                  number: 3000
+          - path: /api/candidate-manager
+            pathType: Prefix
+            backend:
+              service:
+                name: candidate-manager-srv
+                port:
+                  number: 3000
+          - path: /api/partner
+            pathType: Prefix
+            backend:
+              service:
+                name: partner-srv
+                port:
+                  number: 3000
+          - path: /api/company
+            pathType: Prefix
+            backend:
+              service:
+                name: company-srv
+                port:
+                  number: 3000
+          - path: /api/file-manager
+            pathType: Prefix
+            backend:
+              service:
+                name: file-manager-srv
+                port:
+                  number: 3000
+          - path: /api/notification
+            pathType: Prefix
+            backend:
+              service:
+                name: notification-srv
+                port:
+                  number: 3000
+          - path: /api/order
+            pathType: Prefix
+            backend:
+              service:
+                name: orders-srv
+                port:
+                  number: 3000
+          - path: /api/job
+            pathType: Prefix
+            backend:
+              service:
+                name: job-srv
+                port:
+                  number: 3000
+          - path: /api/workitem
+            pathType: Prefix
+            backend:
+              service:
+                name: work-item-srv
+                port:
+                  number: 3000
+          - path: /api/workspace
+            pathType: Prefix
+            backend:
+              service:
+                name: workspace-srv
+                port:
+                  number: 3000
+          - path: /api/studio
+            pathType: Prefix
+            backend:
+              service:
+                name: studio-ai-srv
+                port:
+                  number: 5000
+          - path: /api/parse
+            pathType: Prefix
+            backend:
+              service:
+                name: resume-parse-srv
+                port:
+                  number: 5000
+          - path: /api/interview
+            pathType: Prefix
+            backend:
+              service:
+                name: interview-srv
+                port:
+                  number: 5000
+          - path: /api/assessment
+            pathType: Prefix
+            backend:
+              service:
+                name: assessment-backend-srv
+                port:
+                  number: 3000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web-client-srv
+                port:
+                  number: 3000
+    - host: www.rufous.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web-client-srv
+                port:
+                  number: 3000
+    - host: workforce.rufous.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: workforce-client-srv
+                port:
+                  number: 3000
+    - host: admin.rufous.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: admin-client-srv
+                port:
+                  number: 3000
+    - host: central.rufous.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: central-client-srv
+                port:
+                  number: 3000
+    - host: work.rufous.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: work-client-srv
+                port:
+                  number: 3000
+    - host: workspace.rufous.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: workspace-client-srv
+                port:
+                  number: 3000
+    - host: account.rufous.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: account-client-srv
+                port:
+                  number: 3000
+    - host: studio.rufous.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: studio-client-srv
+                port:
+                  number: 3000
+    - host: interview.rufous.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: interview-client-srv
+                port:
+                  number: 3000
+    - host: assessment.rufous.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: assessment-client-srv
+                port:
+                  number: 3000
+    - host: status.rufous.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: status-client-srv
+                port:
+                  number: 3000

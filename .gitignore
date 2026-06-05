@@ -1,0 +1,36 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# tfvars may contain secrets
+*.tfvars
+*.tfvars.json
+!*.example.tfvars
+
+# Sensitive credentials and keys
+*.key
+*.pem
+*_rsa
+*_ed25519
+*.p12
+*.pfx
+service-account*.json
+*credentials*.json
+application_default_credentials.json
+errored.tfstate
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp

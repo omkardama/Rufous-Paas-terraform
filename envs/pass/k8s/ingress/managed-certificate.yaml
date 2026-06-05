@@ -1,0 +1,18 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: rufous-com-cert
+spec:
+  domains:
+    - rufous.com
+    - www.rufous.com
+    - central.rufous.com
+    - admin.rufous.com
+    - work.rufous.com
+    - workforce.rufous.com
+    - workspace.rufous.com
+    - account.rufous.com
+    - studio.rufous.com
+    - interview.rufous.com
+    - assessment.rufous.com
+    - status.rufous.com
