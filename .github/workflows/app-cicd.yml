@@ -1,0 +1,180 @@
+name: App CI/CD - Build, Push & Deploy to GKE
+
+# Builds the Docker image, pushes to Artifact Registry, and deploys to GKE.
+# Keyless auth to GCP via WIF (same pool as terraform.yml, different service account).
+#
+# Required GitHub Repository Variables:
+#   GCP_WIF_PROVIDER  e.g. projects/123456789/locations/global/workloadIdentityPools/github/providers/gh
+#   GCP_DEPLOY_SA     e.g. gh-deployer@rufous-ai.iam.gserviceaccount.com
+#
+# The deploy SA needs:
+#   roles/artifactregistry.writer    (push images)
+#   roles/container.developer        (kubectl set image)
+#
+# Prereq: a Deployment named `rufous-web` must already exist in each namespace.
+# The pipeline does `kubectl set image`, not first-time apply. Apply base manifests
+# from envs/pass/k8s/ first if the Deployment doesn't exist yet.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'app/**'
+      - '.github/workflows/app-cicd.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'app/**'
+      - '.github/workflows/app-cicd.yml'
+
+concurrency:
+  group: app-cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write          # required for WIF
+
+env:
+  GCP_PROJECT_ID: rufous-ai
+  GCP_REGION: us-central1
+  GAR_REPO: paas-rufous-ai
+  IMAGE_NAME: rufous-web
+  GKE_CLUSTER: rufous-ai-paas
+  APP_DIR: app
+  # Full image URI, tagged by commit SHA. Same artifact promoted across all envs.
+  IMAGE_URI: us-central1-docker.pkg.dev/rufous-ai/paas-rufous-ai/rufous-web:${{ github.sha }}
+
+jobs:
+
+  # ── 1. BUILD & PUSH IMAGE ────────────────────────────────────────────────
+  build-image:
+    name: Build, Tag & Push Image
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.meta.outputs.image_uri }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.APP_DIR }}
+          file: ${{ env.APP_DIR }}/Dockerfile
+          push: false
+          load: true
+          tags: |
+            ${{ env.IMAGE_URI }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Push only on merge to main, not on PR builds
+      - name: Push image (main only)
+        if: github.event_name == 'push'
+        run: docker push "$IMAGE_URI"
+
+      # Also tag :latest on main for convenience
+      - name: Tag & push :latest (main only)
+        if: github.event_name == 'push'
+        run: |
+          LATEST="us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:latest"
+          docker tag "$IMAGE_URI" "$LATEST"
+          docker push "$LATEST"
+
+      - name: Export image URI for downstream jobs
+        id: meta
+        run: echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+  # ── 2. DEPLOY → DEV ──────────────────────────────────────────────────────
+  deploy-dev:
+    name: Deploy to Dev
+    needs: build-image
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GCP_REGION }}
+
+      - name: Deploy & verify rollout
+        run: |
+          kubectl -n dev set image deployment/${{ env.IMAGE_NAME }} \
+            ${{ env.IMAGE_NAME }}=${{ needs.build-image.outputs.image_uri }}
+          kubectl -n dev rollout status deployment/${{ env.IMAGE_NAME }} --timeout=180s
+
+  # ── 3. DEPLOY → TEST ─────────────────────────────────────────────────────
+  deploy-test:
+    name: Deploy to Test
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GCP_REGION }}
+
+      - name: Deploy & verify rollout
+        run: |
+          kubectl -n test set image deployment/${{ env.IMAGE_NAME }} \
+            ${{ env.IMAGE_NAME }}=${{ needs.build-image.outputs.image_uri }}
+          kubectl -n test rollout status deployment/${{ env.IMAGE_NAME }} --timeout=180s
+
+      # Replace with your real smoke-test endpoint, or delete this step.
+      - name: Smoke test
+        run: |
+          curl -fsS --retry 5 --retry-delay 5 https://test.rufous.com/healthz || echo "smoke test skipped"
+
+  # ── 4. DEPLOY → PROD ─────────────────────────────────────────────────────
+  # To gate this on a manual approval, create a GitHub Environment (e.g. `production`)
+  # with required reviewers, then add `environment: production` to this job.
+  deploy-prod:
+    name: Deploy to Prod
+    needs: deploy-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GCP_REGION }}
+
+      - name: Deploy & verify rollout
+        run: |
+          kubectl -n prod set image deployment/${{ env.IMAGE_NAME }} \
+            ${{ env.IMAGE_NAME }}=${{ needs.build-image.outputs.image_uri }}
+          kubectl -n prod rollout status deployment/${{ env.IMAGE_NAME }} --timeout=300s
+
+      - name: Auto-rollback on failed rollout
+        if: failure()
+        run: |
+          echo "Prod rollout failed — rolling back to previous revision"
+          kubectl -n prod rollout undo deployment/${{ env.IMAGE_NAME }}

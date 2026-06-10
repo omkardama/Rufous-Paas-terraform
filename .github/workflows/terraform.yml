@@ -1,0 +1,180 @@
+name: Terraform - PaaS (envs/pass)
+
+# Plan on PR, apply on merge to main.
+# Keyless auth to GCP via Workload Identity Federation (WIF).
+#
+# Required GitHub Repository Variables (Settings -> Variables -> Actions):
+#   GCP_WIF_PROVIDER  e.g. projects/123456789/locations/global/workloadIdentityPools/github/providers/gh
+#   GCP_TF_SA         e.g. gh-terraform@rufous-ai.iam.gserviceaccount.com
+#
+# Required GitHub Repository Secrets:
+#   TFVARS_PASS       full contents of envs/pass/paas.variable.tfvars (file is gitignored)
+#
+# The deploy SA (GCP_TF_SA) needs broader perms than the app deployer. Typical roles:
+#   roles/container.admin, roles/compute.admin, roles/iam.serviceAccountUser,
+#   roles/artifactregistry.admin, roles/storage.admin (on the state bucket),
+#   plus any others your modules touch (DNS, Secret Manager, etc.).
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'envs/pass/**'
+      - '.github/workflows/terraform.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'envs/pass/**'
+      - '.github/workflows/terraform.yml'
+
+concurrency:
+  group: terraform-pass-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write          # required for WIF
+  pull-requests: write     # required to post plan output as a PR comment
+
+env:
+  TF_VERSION: '1.9.5'
+  TF_WORKING_DIR: envs/pass
+  TF_IN_AUTOMATION: 'true'
+  TF_INPUT: '0'
+
+jobs:
+
+  # ── PLAN (PR) ────────────────────────────────────────────────────────────
+  plan:
+    name: Terraform Plan
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_TF_SA }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Materialize tfvars from secret
+        run: |
+          printf '%s' "${TFVARS_PASS}" > paas.variable.tfvars
+        env:
+          TFVARS_PASS: ${{ secrets.TFVARS_PASS }}
+
+      - name: Terraform fmt
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform init
+        id: init
+        run: terraform init -lockfile=readonly
+
+      - name: Terraform validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: Terraform plan
+        id: plan
+        run: |
+          terraform plan -no-color -input=false \
+            -var-file=paas.variable.tfvars \
+            -out=tfplan 2>&1 | tee plan.txt
+        continue-on-error: true
+
+      - name: Comment plan on PR
+        uses: actions/github-script@v7
+        env:
+          PLAN_STDOUT: ${{ steps.plan.outputs.stdout }}
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = '';
+            try { plan = fs.readFileSync('${{ env.TF_WORKING_DIR }}/plan.txt', 'utf8'); } catch (e) {}
+            // Trim to fit GitHub comment size limit (~65k)
+            const MAX = 60000;
+            if (plan.length > MAX) plan = plan.slice(0, MAX) + '\n... [truncated]';
+            const body = `### Terraform Plan — \`${{ env.TF_WORKING_DIR }}\`
+            * fmt: \`${{ steps.fmt.outcome }}\`
+            * init: \`${{ steps.init.outcome }}\`
+            * validate: \`${{ steps.validate.outcome }}\`
+            * plan: \`${{ steps.plan.outcome }}\`
+
+            <details><summary>Show plan</summary>
+
+            \`\`\`hcl
+            ${plan}
+            \`\`\`
+
+            </details>
+
+            *Pusher: @${{ github.actor }} · Commit: \`${{ github.sha }}\`*`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
+
+      - name: Fail if plan errored
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.sha }}
+          path: ${{ env.TF_WORKING_DIR }}/tfplan
+          retention-days: 5
+
+  # ── APPLY (push to main) ─────────────────────────────────────────────────
+  apply:
+    name: Terraform Apply
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_TF_SA }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Materialize tfvars from secret
+        run: |
+          printf '%s' "${TFVARS_PASS}" > paas.variable.tfvars
+        env:
+          TFVARS_PASS: ${{ secrets.TFVARS_PASS }}
+
+      - name: Terraform init
+        run: terraform init -lockfile=readonly
+
+      - name: Terraform plan
+        run: |
+          terraform plan -no-color -input=false \
+            -var-file=paas.variable.tfvars \
+            -out=tfplan
+
+      - name: Terraform apply
+        run: terraform apply -no-color -input=false -auto-approve tfplan
+
+      - name: Terraform outputs
+        run: terraform output -no-color || true
